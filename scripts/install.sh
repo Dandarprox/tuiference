@@ -1,0 +1,31 @@
+#!/usr/bin/env sh
+set -eu
+
+repo="Dandarprox/tuiference"
+install_dir="${INSTALL_DIR:-$HOME/.local/bin}"
+
+os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+arch="$(uname -m)"
+
+case "$arch" in
+    x86_64|amd64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) echo "Unsupported architecture: $arch" >&2; exit 1 ;;
+esac
+
+case "$os" in
+    linux|darwin) ;;
+    *) echo "Unsupported OS: $os" >&2; exit 1 ;;
+esac
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+url="https://github.com/$repo/releases/latest/download/tuiference_${os}_${arch}.tar.gz"
+mkdir -p "$install_dir"
+curl -fsSL "$url" -o "$tmp/tuiference.tar.gz"
+tar -xzf "$tmp/tuiference.tar.gz" -C "$tmp"
+install "$tmp/tuiference" "$install_dir/tuiference"
+
+echo "Installed tuiference to $install_dir/tuiference"
+echo "Make sure $install_dir is in your PATH."
