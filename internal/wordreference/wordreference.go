@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -41,6 +43,8 @@ func NewClient() Client {
 	return Client{http: &http.Client{Timeout: 12 * time.Second}}
 }
 
+var challengeCookieRe = regexp.MustCompile(`document\.cookie\s*=\s*"([^"]+)"`)
+
 func (c Client) Lookup(ctx context.Context, origin, target Language, term string) ([]Result, error) {
 	term = strings.TrimSpace(term)
 	if term == "" {
@@ -55,11 +59,15 @@ func (c Client) Lookup(ctx context.Context, origin, target Language, term string
 	}
 
 	lookupURL := fmt.Sprintf("https://www.wordreference.com/%s%s/%s", origin.Code, target.Code, url.PathEscape(term))
+	return c.lookupWordReference(ctx, lookupURL)
+}
+
+func (c Client) lookupWordReference(ctx context.Context, lookupURL string) ([]Result, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, lookupURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "tuiference/0.1 (+https://wordreference.com)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36")
 
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -67,6 +75,41 @@ func (c Client) Lookup(ctx context.Context, origin, target Language, term string
 	}
 	defer res.Body.Close()
 
+	if res.StatusCode == 418 {
+		body, readErr := io.ReadAll(res.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("wordreference returned %s: %w", res.Status, readErr)
+		}
+		cookie := extractChallengeCookie(string(body))
+		if cookie == "" {
+			return nil, fmt.Errorf("wordreference returned %s (no challenge cookie found)", res.Status)
+		}
+		req2, err := http.NewRequestWithContext(ctx, http.MethodGet, lookupURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req2.Header.Set("User-Agent", req.Header.Get("User-Agent"))
+		req2.Header.Set("Cookie", cookie)
+		res2, err := c.http.Do(req2)
+		if err != nil {
+			return nil, err
+		}
+		defer res2.Body.Close()
+		return parseWordReferenceResponse(res2)
+	}
+
+	return parseWordReferenceResponse(res)
+}
+
+func extractChallengeCookie(body string) string {
+	match := challengeCookieRe.FindStringSubmatch(body)
+	if match == nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimSpace(match[1]), ";")
+}
+
+func parseWordReferenceResponse(res *http.Response) ([]Result, error) {
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("wordreference returned %s", res.Status)
 	}
@@ -93,7 +136,7 @@ func (c Client) lookupPONS(ctx context.Context, origin, target Language, term st
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "tuiference/0.1 (+https://github.com/Dandarprox/tuiference)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36")
 	req.Header.Set("Accept-Language", "en")
 
 	res, err := c.http.Do(req)
